@@ -4,9 +4,45 @@ import { IPC_CHANNELS } from '../../shared/constants';
 import type { IPCResult } from '../../shared/types';
 import path from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import os from 'os';
 import type { AutoBuildSourceUpdateProgress, SourceEnvConfig, SourceEnvCheckResult } from '../../shared/types';
 import { checkForUpdates as checkSourceUpdates, downloadAndApplyUpdate, getBundledVersion, getEffectiveVersion, getEffectiveSourcePath } from '../auto-claude-updater';
 import { debugLog } from '../../shared/utils/debug-logger';
+
+/**
+ * Check if auth token exists in settings.json (for custom API configurations)
+ * Returns { hasToken, token, isCustomApi }
+ */
+function getTokenFromSettingsJson(): { hasToken: boolean; token?: string; isCustomApi: boolean } {
+  const settingsPaths = [
+    path.join(os.homedir(), '.claude', 'settings.json'),
+    path.join(process.env.USERPROFILE || os.homedir(), '.claude', 'settings.json'),
+  ];
+
+  for (const settingsPath of settingsPaths) {
+    try {
+      if (existsSync(settingsPath)) {
+        const content = readFileSync(settingsPath, 'utf-8');
+        const data = JSON.parse(content);
+        const env = data.env || {};
+
+        // Check for custom API setup
+        const isCustomApi = !!env.ANTHROPIC_BASE_URL;
+
+        // Get auth token (prefer ANTHROPIC_AUTH_TOKEN for custom APIs, also check CLAUDE_CODE_OAUTH_TOKEN)
+        const token = env.ANTHROPIC_AUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN;
+
+        if (token) {
+          return { hasToken: true, token, isCustomApi };
+        }
+      }
+    } catch {
+      // Ignore parse errors, continue to next path
+    }
+  }
+
+  return { hasToken: false, isCustomApi: false };
+}
 
 
 /**
@@ -136,7 +172,7 @@ export function registerAutobuildSourceHandlers(
         let value = trimmed.substring(eqIndex + 1).trim();
         // Remove quotes if present
         if ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))) {
+          (value.startsWith("'") && value.endsWith("'"))) {
           value = value.slice(1, -1);
         }
         vars[key] = value;
@@ -151,10 +187,12 @@ export function registerAutobuildSourceHandlers(
       try {
         const sourcePath = getEffectiveSourcePath();
         if (!sourcePath) {
+          // Check settings.json even if source path not found
+          const settingsToken = getTokenFromSettingsJson();
           return {
             success: true,
             data: {
-              hasClaudeToken: false,
+              hasClaudeToken: settingsToken.hasToken,
               envExists: false,
               sourcePath: undefined
             }
@@ -165,10 +203,12 @@ export function registerAutobuildSourceHandlers(
         const envExists = existsSync(envPath);
 
         if (!envExists) {
+          // Check settings.json if .env doesn't exist
+          const settingsToken = getTokenFromSettingsJson();
           return {
             success: true,
             data: {
-              hasClaudeToken: false,
+              hasClaudeToken: settingsToken.hasToken,
               envExists: false,
               sourcePath
             }
@@ -177,13 +217,20 @@ export function registerAutobuildSourceHandlers(
 
         const content = readFileSync(envPath, 'utf-8');
         const vars = parseSourceEnvFile(content);
-        const hasToken = !!vars['CLAUDE_CODE_OAUTH_TOKEN'];
+        // Check for token in .env, also check ANTHROPIC_AUTH_TOKEN for custom APIs
+        let hasToken = !!vars['CLAUDE_CODE_OAUTH_TOKEN'] || !!vars['ANTHROPIC_AUTH_TOKEN'];
+
+        // Also check settings.json if no token in .env
+        if (!hasToken) {
+          const settingsToken = getTokenFromSettingsJson();
+          hasToken = settingsToken.hasToken;
+        }
 
         return {
           success: true,
           data: {
             hasClaudeToken: hasToken,
-            claudeOAuthToken: hasToken ? vars['CLAUDE_CODE_OAUTH_TOKEN'] : undefined,
+            claudeOAuthToken: vars['CLAUDE_CODE_OAUTH_TOKEN'] || vars['ANTHROPIC_AUTH_TOKEN'],
             envExists: true,
             sourcePath
           }
@@ -275,6 +322,20 @@ export function registerAutobuildSourceHandlers(
     async (): Promise<IPCResult<SourceEnvCheckResult>> => {
       try {
         const sourcePath = getEffectiveSourcePath();
+
+        // First, check settings.json (works even without source path)
+        const settingsToken = getTokenFromSettingsJson();
+        if (settingsToken.hasToken) {
+          debugLog('[IPC] Token found in settings.json (custom API:', settingsToken.isCustomApi, ')');
+          return {
+            success: true,
+            data: {
+              hasToken: true,
+              sourcePath: sourcePath || undefined
+            }
+          };
+        }
+
         if (!sourcePath) {
           return {
             success: true,
@@ -300,7 +361,9 @@ export function registerAutobuildSourceHandlers(
 
         const content = readFileSync(envPath, 'utf-8');
         const vars = parseSourceEnvFile(content);
-        const hasToken = !!vars['CLAUDE_CODE_OAUTH_TOKEN'] && vars['CLAUDE_CODE_OAUTH_TOKEN'].length > 0;
+        // Check for both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_AUTH_TOKEN
+        const hasToken = (!!vars['CLAUDE_CODE_OAUTH_TOKEN'] && vars['CLAUDE_CODE_OAUTH_TOKEN'].length > 0) ||
+          (!!vars['ANTHROPIC_AUTH_TOKEN'] && vars['ANTHROPIC_AUTH_TOKEN'].length > 0);
 
         return {
           success: true,
@@ -319,3 +382,4 @@ export function registerAutobuildSourceHandlers(
   );
 
 }
+

@@ -94,20 +94,37 @@ export class PythonEnvManager extends EventEmitter {
   /**
    * Get the path to bundled site-packages (for packaged apps).
    * These are pre-installed during the build process.
+   * Also checks for bundled packages in win-unpacked scenarios.
    */
   private getBundledSitePackagesPath(): string | null {
-    if (!app.isPackaged) {
-      return null;
+    // Check multiple possible resource paths (same logic as python-detector)
+    const possibleResourcePaths = [process.resourcesPath];
+
+    // For win-unpacked scenarios, also check relative to app path
+    if (!app.isPackaged && process.resourcesPath) {
+      try {
+        const appPath = app.getAppPath();
+        if (appPath.includes('.asar')) {
+          possibleResourcePaths.push(path.dirname(appPath));
+        } else {
+          possibleResourcePaths.push(path.join(path.dirname(appPath), 'resources'));
+        }
+      } catch {
+        // Ignore errors in test environments
+      }
     }
 
-    const sitePackagesPath = path.join(process.resourcesPath, 'python-site-packages');
+    for (const resourcesPath of possibleResourcePaths) {
+      if (!resourcesPath) continue;
 
-    if (existsSync(sitePackagesPath)) {
-      console.log(`[PythonEnvManager] Found bundled site-packages at: ${sitePackagesPath}`);
-      return sitePackagesPath;
+      const sitePackagesPath = path.join(resourcesPath, 'python-site-packages');
+      if (existsSync(sitePackagesPath)) {
+        console.log(`[PythonEnvManager] Found bundled site-packages at: ${sitePackagesPath}`);
+        return sitePackagesPath;
+      }
     }
 
-    console.log(`[PythonEnvManager] Bundled site-packages not found at: ${sitePackagesPath}`);
+    console.log(`[PythonEnvManager] Bundled site-packages not found in any resources path`);
     return null;
   }
 
@@ -225,11 +242,11 @@ if sys.version_info >= (3, 12):
       const isPackaged = app.isPackaged;
       const errorMsg = isPackaged
         ? 'Python not found. The bundled Python may be corrupted.\n\n' +
-          'Please try reinstalling the application, or install Python 3.10+ manually:\n' +
-          'https://www.python.org/downloads/'
+        'Please try reinstalling the application, or install Python 3.10+ manually:\n' +
+        'https://www.python.org/downloads/'
         : 'Python 3.10+ not found. Please install Python 3.10 or higher.\n\n' +
-          'This is required for development mode. Download from:\n' +
-          'https://www.python.org/downloads/';
+        'This is required for development mode. Download from:\n' +
+        'https://www.python.org/downloads/';
       this.emit('error', errorMsg);
       return false;
     }
@@ -456,8 +473,9 @@ if sys.version_info >= (3, 12):
     console.warn('[PythonEnvManager] Initializing with path:', autoBuildSourcePath);
 
     try {
-      // For packaged apps, try to use bundled packages first (no pip install needed!)
-      if (app.isPackaged && this.hasBundledPackages()) {
+      // Try to use bundled packages first (no pip install needed!)
+      // This works for both packaged apps and win-unpacked scenarios
+      if (this.hasBundledPackages()) {
         console.warn('[PythonEnvManager] Using bundled Python packages (no pip install needed)');
 
         const bundledPython = getBundledPythonPath();
@@ -630,9 +648,27 @@ if sys.version_info >= (3, 12):
       PYTHONNOUSERSITE: '1',
     };
 
-    // Set PYTHONPATH to our site-packages
+    // Set PYTHONPATH to our site-packages and additional required paths
     if (this.sitePackagesPath) {
-      env.PYTHONPATH = this.sitePackagesPath;
+      const pythonPaths = [
+        this.sitePackagesPath,
+        // Include win32/lib for pywintypes and other win32 modules
+        path.join(this.sitePackagesPath, 'win32', 'lib'),
+        path.join(this.sitePackagesPath, 'win32'),
+        // Include pythonwin for Pythonwin modules
+        path.join(this.sitePackagesPath, 'pythonwin'),
+      ];
+      env.PYTHONPATH = pythonPaths.join(path.delimiter);
+
+      // For Windows: Add pywin32_system32 to PATH so DLLs can be found
+      if (process.platform === 'win32') {
+        const pywin32Dll = path.join(this.sitePackagesPath, 'pywin32_system32');
+        if (existsSync(pywin32Dll)) {
+          // Prepend to existing PATH
+          const existingPath = process.env.PATH || '';
+          env.PATH = `${pywin32Dll}${path.delimiter}${existingPath}`;
+        }
+      }
     }
 
     return env;

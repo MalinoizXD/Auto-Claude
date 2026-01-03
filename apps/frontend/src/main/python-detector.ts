@@ -6,31 +6,52 @@ import { app } from 'electron';
 /**
  * Get the path to the bundled Python executable.
  * For packaged apps, Python is bundled in the resources directory.
+ * Also checks for bundled Python in win-unpacked scenarios where app.isPackaged may be false.
  *
  * @returns The path to bundled Python, or null if not found/not packaged
  */
 export function getBundledPythonPath(): string | null {
-  // Only check for bundled Python in packaged apps
-  if (!app.isPackaged) {
-    return null;
-  }
-
-  const resourcesPath = process.resourcesPath;
   const isWindows = process.platform === 'win32';
 
-  // Bundled Python location in packaged app
-  const pythonPath = isWindows
-    ? path.join(resourcesPath, 'python', 'python.exe')
-    : path.join(resourcesPath, 'python', 'bin', 'python3');
+  // Check multiple possible resource paths
+  const possibleResourcePaths = [process.resourcesPath];
 
-  if (existsSync(pythonPath)) {
-    console.log(`[Python] Found bundled Python at: ${pythonPath}`);
-    return pythonPath;
+  // For win-unpacked scenarios, also check relative to app path
+  // This handles cases where app.isPackaged is false but bundled Python exists
+  if (!app.isPackaged && process.resourcesPath) {
+    // Also try app.getAppPath() based resources
+    try {
+      const appPath = app.getAppPath();
+      // If running from asar, go up to resources
+      if (appPath.includes('.asar')) {
+        possibleResourcePaths.push(path.dirname(appPath));
+      } else {
+        // For unpacked, check relative resources folder
+        possibleResourcePaths.push(path.join(path.dirname(appPath), 'resources'));
+      }
+    } catch {
+      // Ignore errors in test environments
+    }
   }
 
-  console.log(`[Python] Bundled Python not found at: ${pythonPath}`);
+  for (const resourcesPath of possibleResourcePaths) {
+    if (!resourcesPath) continue;
+
+    // Bundled Python location
+    const pythonPath = isWindows
+      ? path.join(resourcesPath, 'python', 'python.exe')
+      : path.join(resourcesPath, 'python', 'bin', 'python3');
+
+    if (existsSync(pythonPath)) {
+      console.log(`[Python] Found bundled Python at: ${pythonPath}`);
+      return pythonPath;
+    }
+  }
+
+  console.log(`[Python] Bundled Python not found in any resources path`);
   return null;
 }
+
 
 /**
  * Find the first existing Homebrew Python installation.
@@ -222,7 +243,7 @@ export function parsePythonCommand(pythonPath: string): [string, string[]] {
   }
 
   if ((cleanPath.startsWith('"') && cleanPath.endsWith('"')) ||
-      (cleanPath.startsWith("'") && cleanPath.endsWith("'"))) {
+    (cleanPath.startsWith("'") && cleanPath.endsWith("'"))) {
     cleanPath = cleanPath.slice(1, -1);
     // Validate again after quote removal
     if (cleanPath === '') {
@@ -389,7 +410,7 @@ export function validatePythonPath(pythonPath: string): PythonPathValidation {
   // Strip surrounding quotes for validation
   let cleanPath = trimmedPath;
   if ((cleanPath.startsWith('"') && cleanPath.endsWith('"')) ||
-      (cleanPath.startsWith("'") && cleanPath.endsWith("'"))) {
+    (cleanPath.startsWith("'") && cleanPath.endsWith("'"))) {
     cleanPath = cleanPath.slice(1, -1);
   }
 

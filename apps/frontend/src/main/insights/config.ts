@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { app } from 'electron';
 import { getProfileEnv } from '../rate-limit-detector';
 import { getValidatedPythonPath } from '../python-detector';
-import { getConfiguredPythonPath } from '../python-env-manager';
+import { getConfiguredPythonPath, pythonEnvManager } from '../python-env-manager';
 
 /**
  * Configuration manager for insights service
@@ -86,7 +86,7 @@ export class InsightsConfig {
           let value = trimmed.substring(eqIndex + 1).trim();
 
           if ((value.startsWith('"') && value.endsWith('"')) ||
-              (value.startsWith("'") && value.endsWith("'"))) {
+            (value.startsWith("'") && value.endsWith("'"))) {
             value = value.slice(1, -1);
           }
 
@@ -102,14 +102,17 @@ export class InsightsConfig {
 
   /**
    * Get complete environment for process execution
-   * Includes system env, auto-claude env, and active Claude profile
+   * Includes system env, Python env (PYTHONPATH, DLL paths), auto-claude env, and active Claude profile
    */
   getProcessEnv(): Record<string, string> {
     const autoBuildEnv = this.loadAutoBuildEnv();
     const profileEnv = getProfileEnv();
+    // Get Python environment with PYTHONPATH and pywin32 DLL paths
+    const pythonEnv = pythonEnvManager.getPythonEnv();
 
     return {
       ...process.env as Record<string, string>,
+      ...pythonEnv,  // Include PYTHONPATH and PATH for DLLs
       ...autoBuildEnv,
       ...profileEnv,
       PYTHONUNBUFFERED: '1',
@@ -118,3 +121,4 @@ export class InsightsConfig {
     };
   }
 }
+

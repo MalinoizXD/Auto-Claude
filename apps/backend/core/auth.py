@@ -17,8 +17,51 @@ import subprocess
 # This prevents silent billing to user's API credits when OAuth fails.
 AUTH_TOKEN_ENV_VARS = [
     "CLAUDE_CODE_OAUTH_TOKEN",  # OAuth token from Claude Code CLI
-    "ANTHROPIC_AUTH_TOKEN",  # CCR/proxy token (for enterprise setups)
+    "ANTHROPIC_AUTH_TOKEN",  # CCR/proxy token (for enterprise/custom API setups)
 ]
+
+
+def _is_using_custom_api() -> bool:
+    """Check if a custom API endpoint is configured."""
+    return bool(os.environ.get("ANTHROPIC_BASE_URL"))
+
+
+def _get_token_from_settings_json() -> tuple[str | None, bool]:
+    """
+    Get authentication token from settings.json.
+    
+    Returns:
+        Tuple of (token, is_custom_api) - token if found, and whether it's for a custom API
+    """
+    try:
+        settings_paths = [
+            os.path.expandvars(r"%USERPROFILE%\.claude\settings.json"),
+            os.path.expanduser("~/.claude/settings.json"),
+        ]
+        
+        for settings_path in settings_paths:
+            if os.path.exists(settings_path):
+                with open(settings_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                    env = data.get("env", {})
+                    
+                    # Check for custom API setup
+                    base_url = env.get("ANTHROPIC_BASE_URL")
+                    is_custom = bool(base_url)
+                    
+                    # Set environment variables from settings
+                    for key, value in env.items():
+                        if value and not os.environ.get(key):
+                            os.environ[key] = value
+                    
+                    # Get auth token
+                    token = env.get("ANTHROPIC_AUTH_TOKEN") or env.get("CLAUDE_CODE_OAUTH_TOKEN")
+                    if token:
+                        return token, is_custom
+        
+        return None, False
+    except (json.JSONDecodeError, KeyError, FileNotFoundError, Exception):
+        return None, False
 
 # Environment variables to pass through to SDK subprocess
 # NOTE: ANTHROPIC_API_KEY is intentionally excluded to prevent silent API billing
@@ -85,7 +128,8 @@ def _get_token_from_macos_keychain() -> str | None:
             return None
 
         # Validate token format (Claude OAuth tokens start with sk-ant-oat01-)
-        if not token.startswith("sk-ant-oat01-"):
+        # Skip validation if using custom API
+        if not _is_using_custom_api() and not token.startswith("sk-ant-oat01-"):
             return None
 
         return token
@@ -113,8 +157,10 @@ def _get_token_from_windows_credential_files() -> str | None:
                 with open(cred_path, encoding="utf-8") as f:
                     data = json.load(f)
                     token = data.get("claudeAiOauth", {}).get("accessToken")
-                    if token and token.startswith("sk-ant-oat01-"):
-                        return token
+                    # Skip format validation if using custom API
+                    if token:
+                        if _is_using_custom_api() or token.startswith("sk-ant-oat01-"):
+                            return token
 
         return None
 
@@ -137,7 +183,12 @@ def get_auth_token() -> str | None:
     Returns:
         Token string if found, None otherwise
     """
-    # First check environment variables
+    # First try to load from settings.json (also sets env vars)
+    settings_token, is_custom = _get_token_from_settings_json()
+    if settings_token:
+        return settings_token
+    
+    # Check environment variables
     for var in AUTH_TOKEN_ENV_VARS:
         token = os.environ.get(var)
         if token:
@@ -149,7 +200,12 @@ def get_auth_token() -> str | None:
 
 def get_auth_token_source() -> str | None:
     """Get the name of the source that provided the auth token."""
-    # Check environment variables first
+    # Check settings.json first
+    token, is_custom = _get_token_from_settings_json()
+    if token:
+        return "settings.json (custom API)" if is_custom else "settings.json"
+    
+    # Check environment variables
     for var in AUTH_TOKEN_ENV_VARS:
         if os.environ.get(var):
             return var
