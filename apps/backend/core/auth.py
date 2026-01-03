@@ -29,7 +29,7 @@ def _is_using_custom_api() -> bool:
 def _get_token_from_settings_json() -> tuple[str | None, bool]:
     """
     Get authentication token from settings.json.
-    
+
     Returns:
         Tuple of (token, is_custom_api) - token if found, and whether it's for a custom API
     """
@@ -38,30 +38,33 @@ def _get_token_from_settings_json() -> tuple[str | None, bool]:
             os.path.expandvars(r"%USERPROFILE%\.claude\settings.json"),
             os.path.expanduser("~/.claude/settings.json"),
         ]
-        
+
         for settings_path in settings_paths:
             if os.path.exists(settings_path):
                 with open(settings_path, encoding="utf-8") as f:
                     data = json.load(f)
                     env = data.get("env", {})
-                    
+
                     # Check for custom API setup
                     base_url = env.get("ANTHROPIC_BASE_URL")
                     is_custom = bool(base_url)
-                    
+
                     # Set environment variables from settings
                     for key, value in env.items():
                         if value and not os.environ.get(key):
                             os.environ[key] = value
-                    
+
                     # Get auth token
-                    token = env.get("ANTHROPIC_AUTH_TOKEN") or env.get("CLAUDE_CODE_OAUTH_TOKEN")
+                    token = env.get("ANTHROPIC_AUTH_TOKEN") or env.get(
+                        "CLAUDE_CODE_OAUTH_TOKEN"
+                    )
                     if token:
                         return token, is_custom
-        
+
         return None, False
     except (json.JSONDecodeError, KeyError, FileNotFoundError, Exception):
         return None, False
+
 
 # Environment variables to pass through to SDK subprocess
 # NOTE: ANTHROPIC_API_KEY is intentionally excluded to prevent silent API billing
@@ -187,7 +190,7 @@ def get_auth_token() -> str | None:
     settings_token, is_custom = _get_token_from_settings_json()
     if settings_token:
         return settings_token
-    
+
     # Check environment variables
     for var in AUTH_TOKEN_ENV_VARS:
         token = os.environ.get(var)
@@ -204,7 +207,7 @@ def get_auth_token_source() -> str | None:
     token, is_custom = _get_token_from_settings_json()
     if token:
         return "settings.json (custom API)" if is_custom else "settings.json"
-    
+
     # Check environment variables
     for var in AUTH_TOKEN_ENV_VARS:
         if os.environ.get(var):
