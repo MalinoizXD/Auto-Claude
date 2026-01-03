@@ -247,7 +247,25 @@ def merge_existing_build(
 
                 if had_conflicts or files_merged or ai_assisted:
                     # Git conflicts were resolved OR path-mapped files were AI merged
-                    # Changes are already written and staged - no need for git merge
+                    # Changes are already written and staged
+                    
+                    # Create commit if not stage-only mode
+                    if not no_commit:
+                        commit_msg = f"auto-claude: Merge {spec_name} (AI-assisted)"
+                        commit_result = subprocess.run(
+                            ["git", "commit", "-m", commit_msg],
+                            cwd=project_dir,
+                            capture_output=True,
+                            text=True,
+                        )
+                        if commit_result.returncode != 0:
+                            # Check if there's nothing to commit (changes already committed)
+                            if "nothing to commit" in commit_result.stdout or "nothing to commit" in commit_result.stderr:
+                                print(muted("  (No staged changes to commit - may already be committed)"))
+                            else:
+                                print(error(f"  Failed to create commit: {commit_result.stderr}"))
+                                return False
+                    
                     _print_merge_success(
                         no_commit, stats, spec_name=spec_name, keep_worktree=True
                     )
