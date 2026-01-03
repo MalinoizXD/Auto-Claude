@@ -373,35 +373,61 @@ export function Worktrees({ projectId }: WorktreesProps) {
 
           {mergeResult && (
             <div className="py-4">
-              <div className={`rounded-lg p-4 text-sm ${
-                mergeResult.success
-                  ? 'bg-success/10 border border-success/30'
-                  : 'bg-destructive/10 border border-destructive/30'
-              }`}>
-                <div className="flex items-start gap-2">
-                  {mergeResult.success ? (
-                    <Check className="h-4 w-4 text-success mt-0.5" />
-                  ) : (
-                    <X className="h-4 w-4 text-destructive mt-0.5" />
-                  )}
-                  <div>
-                    <p className={`font-medium ${mergeResult.success ? 'text-success' : 'text-destructive'}`}>
-                      {mergeResult.success ? 'Merge Successful' : 'Merge Failed'}
-                    </p>
-                    <p className="text-muted-foreground mt-1">{mergeResult.message}</p>
-                    {mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0 && (
-                      <div className="mt-2">
-                        <p className="text-xs font-medium">Conflicting files:</p>
-                        <ul className="list-disc list-inside text-xs mt-1">
-                          {mergeResult.conflictFiles.map(file => (
-                            <li key={file} className="font-mono">{file}</li>
-                          ))}
-                        </ul>
+              {(() => {
+                // Determine the result type based on the message
+                const isAlreadyMerged = mergeResult.message?.toLowerCase().includes('already merged');
+                const isNoChanges = mergeResult.message?.toLowerCase().includes('no changes') ||
+                  mergeResult.message?.toLowerCase().includes('branches are identical');
+                const isWarning = isAlreadyMerged || isNoChanges;
+
+                return (
+                  <div className={`rounded-lg p-4 text-sm ${mergeResult.success
+                      ? isWarning
+                        ? 'bg-warning/10 border border-warning/30'
+                        : 'bg-success/10 border border-success/30'
+                      : 'bg-destructive/10 border border-destructive/30'
+                    }`}>
+                    <div className="flex items-start gap-2">
+                      {mergeResult.success ? (
+                        isWarning ? (
+                          <AlertCircle className="h-4 w-4 text-warning mt-0.5" />
+                        ) : (
+                          <Check className="h-4 w-4 text-success mt-0.5" />
+                        )
+                      ) : (
+                        <X className="h-4 w-4 text-destructive mt-0.5" />
+                      )}
+                      <div>
+                        <p className={`font-medium ${mergeResult.success
+                            ? isWarning
+                              ? 'text-warning'
+                              : 'text-success'
+                            : 'text-destructive'
+                          }`}>
+                          {mergeResult.success
+                            ? isAlreadyMerged
+                              ? 'Already Merged'
+                              : isNoChanges
+                                ? 'Nothing to Merge'
+                                : 'Merge Successful'
+                            : 'Merge Failed'}
+                        </p>
+                        <p className="text-muted-foreground mt-1">{mergeResult.message}</p>
+                        {mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium">Conflicting files:</p>
+                            <ul className="list-disc list-inside text-xs mt-1">
+                              {mergeResult.conflictFiles.map(file => (
+                                <li key={file} className="font-mono">{file}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
-                </div>
-              </div>
+                );
+              })()}
             </div>
           )}
 

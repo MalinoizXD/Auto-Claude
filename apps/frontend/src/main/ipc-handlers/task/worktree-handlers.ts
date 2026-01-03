@@ -1501,8 +1501,8 @@ export function registerWorktreeHandlers(
               // Check if merge might have succeeded before the hang
               // Look for success indicators in the output
               const mayHaveSucceeded = stdout.includes('staged') ||
-                                       stdout.includes('Successfully merged') ||
-                                       stdout.includes('Changes from');
+                stdout.includes('Successfully merged') ||
+                stdout.includes('Changes from');
 
               if (mayHaveSucceeded) {
                 debug('TIMEOUT: Process hung but merge may have succeeded based on output');
@@ -1625,10 +1625,80 @@ export function registerWorktreeHandlers(
                 staged = true;
               } else {
                 // Full merge (not stage-only)
-                newStatus = 'done';
-                planStatus = 'completed';
-                message = 'Changes merged successfully';
-                staged = false;
+                // Verify that a merge commit was actually created or changes were applied
+                let hasNewMergeCommit = false;
+                let branchAlreadyMerged = false;
+
+                const specBranch = `auto-claude/${task.specId}`;
+                try {
+                  // Check if current branch contains all commits from spec branch (already merged)
+                  try {
+                    execFileSync(getToolPath('git'), ['merge-base', '--is-ancestor', specBranch, 'HEAD'], {
+                      cwd: project.path,
+                      encoding: 'utf-8',
+                      stdio: ['pipe', 'pipe', 'pipe']
+                    });
+                    // If we reach here, command succeeded - branch is fully merged
+                    branchAlreadyMerged = true;
+                    debug('Full merge verification: branch already merged');
+                  } catch {
+                    // Exit code non-zero means not merged
+                    branchAlreadyMerged = false;
+                  }
+
+                  // Check if a merge commit was created by looking at the most recent commit message
+                  if (!branchAlreadyMerged) {
+                    const lastCommitMsg = execFileSync(getToolPath('git'), ['log', '-1', '--format=%s'], {
+                      cwd: project.path,
+                      encoding: 'utf-8'
+                    }).trim();
+                    hasNewMergeCommit = lastCommitMsg.includes('auto-claude:') && lastCommitMsg.includes('Merge');
+                    debug('Full merge verification: hasNewMergeCommit:', hasNewMergeCommit, 'lastCommitMsg:', lastCommitMsg);
+                  }
+                } catch (e) {
+                  debug('Failed to verify merge commit:', e);
+                }
+
+                if (branchAlreadyMerged) {
+                  newStatus = 'done';
+                  planStatus = 'completed';
+                  message = 'Changes were already merged. No new commit created.';
+                  staged = false;
+                  debug('Full merge: branch was already merged, no new commit needed');
+                } else if (hasNewMergeCommit) {
+                  newStatus = 'done';
+                  planStatus = 'completed';
+                  message = 'Changes merged successfully with a new merge commit.';
+                  staged = false;
+                  debug('Full merge: new merge commit created');
+                } else {
+                  // Check if there are any differences at all
+                  try {
+                    const diffResult = execFileSync(getToolPath('git'), ['diff', specBranch, '--stat'], {
+                      cwd: project.path,
+                      encoding: 'utf-8'
+                    }).trim();
+                    if (diffResult.length === 0) {
+                      newStatus = 'done';
+                      planStatus = 'completed';
+                      message = 'No changes to merge - branches are identical.';
+                      staged = false;
+                      debug('Full merge: branches are identical, nothing to merge');
+                    } else {
+                      // There are differences but no merge commit - this might be a fast-forward or error
+                      newStatus = 'done';
+                      planStatus = 'completed';
+                      message = 'Merge completed. Review git log for details.';
+                      staged = false;
+                      debug('Full merge: differences exist but no merge commit detected');
+                    }
+                  } catch {
+                    newStatus = 'done';
+                    planStatus = 'completed';
+                    message = 'Merge operation completed.';
+                    staged = false;
+                  }
+                }
               }
 
               debug('Merge result. isStageOnly:', isStageOnly, 'newStatus:', newStatus, 'staged:', staged);
